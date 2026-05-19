@@ -30,6 +30,30 @@ A production-grade, highly optimized, multi-tenant Intelligence-as-a-Service (Ia
 
 ---
 
+## Edge AI & Low-Level Hardware Experiments
+
+To satisfy strict edge-device deployments (such as consumer NPUs and low-power microcontrollers), the `/experiments` directory contains low-level implementations validating memory-efficiency and quantization claims:
+
+1. **Memory-Aware Stream (MAS) Attention (`experiments/mas_attention.py`)**:
+   * A PyTorch implementation subclassing `nn.Module` that processes massive sequence lengths on constrained SRAM buffers.
+   * Dynamically divides Query, Key, and Value tensors into micro-blocks of size $B_q$ and $B_k$ satisfying:
+     $$\text{SRAM Limit} \ge (B_q + B_k) \times d_k \times \text{element\_size}$$
+   * Integrates mixed-precision training (`torch.cuda.amp.autocast`) to reduce register pressure.
+
+2. **Model Quantization (`experiments/quantize_model.py`)**:
+   * Implements Post-Training Static Quantization (PTQ) in PyTorch.
+   * Inserts quantization observers (`QuantStub`, `DeQuantStub`) and calibrates weights using static activations to compress models from standard `FP32` precision to quantized `INT8`, yielding a ~75% reduction in model size.
+
+3. **CUDA Tiled Matrix Projection (`experiments/attention_tiling.cu`)**:
+   * A raw C++/CUDA kernel performing tiled matrix multiplication for multi-head attention projections.
+   * Utilizes Thread-Block Shared Memory (`__shared__`) to load $16 \times 16$ tiling segments, reducing global GPU memory reads from $O(M \cdot N \cdot K)$ to $O(M \cdot N)$ memory transactions:
+     ```cpp
+     __shared__ float s_A[TILE_WIDTH][TILE_WIDTH];
+     __shared__ float s_B[TILE_WIDTH][TILE_WIDTH];
+     ```
+
+---
+
 ## Installation & Setup
 
 ### 1. Install Dependencies
