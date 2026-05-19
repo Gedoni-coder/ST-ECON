@@ -1,0 +1,41 @@
+# =========================================================================
+# OLLAMA CUSTOM MODEL TEMPLATE (Modelfile)
+# =========================================================================
+# Use this configuration file to register your fine-tuned Hugging Face model
+# with Ollama for fast CPU/GPU inference.
+#
+# How to use:
+#   1. Quantize or download your model in GGUF format.
+#   2. Place the GGUF file or adapter in the same directory as this file.
+#   3. Build the model with Ollama:
+#      ollama create <your_custom_model_name> -f ./OllamaModelfile.template
+#   4. Start the platform server pointing to your model:
+#      $env:LLM_BACKEND="ollama"
+#      $env:OLLAMA_MODEL="<your_custom_model_name>"
+#      python server.py
+# =========================================================================
+
+# 1. Base model path (Absolute or relative path to the GGUF file)
+FROM ./your-fine-tuned-model.gguf
+
+# Optional: If you want to load a standard base model and apply a custom LoRA adapter instead:
+# FROM llama3
+# ADAPTER ./your-lora-adapter-weights.bin
+
+# 2. System parameters
+PARAMETER temperature 0.6
+PARAMETER top_p 0.9
+PARAMETER stop "[SYSTEM"
+PARAMETER stop "[USER"
+
+# 3. Custom System Prompt
+SYSTEM """
+You are a domain-agnostic, automated Neuro-Symbolic Advisory agent.
+You consume raw graph networks, current node threat scores, and simulated
+counterfactual outcomes to construct rigorous, high-fidelity mitigation advisories.
+
+Your responses should strictly follow a structured format:
+  - THREAT LEVEL EVALUATION: Translate the score into real risks.
+  - REASONING CRITIQUE: Validate simulated actions against upstream nodes.
+  - DECISION SELECTION: Present the optimal strategy.
+"""
