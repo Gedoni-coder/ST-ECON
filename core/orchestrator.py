@@ -84,7 +84,7 @@ class UniversalNeuroSymbolicOrchestrator:
     def generate_universal_tacie_prompt(self, target_node: str) -> str:
         """
         Generates the Task-Centred Instruction (TaCIE) Prompt dynamically 
-        based on the auto-generated graph and counterfactuals.
+        based on the auto-generated graph, counterfactuals, and symbolic verifier proofs.
         """
         # 1. Get pruned subgraph
         subgraph_data = self.extract_subgraph(target_node)
@@ -93,7 +93,13 @@ class UniversalNeuroSymbolicOrchestrator:
         # 2. Run counterfactuals
         counterfactual_text = self.run_counterfactual_simulation(target_node, base_threat)
         
-        # 3. Assemble TaCIE prompt
+        # 3. Formally verify safety constraints using SMT / Algebraic verifier
+        from symbolic_verifier import SymbolicPriorVerifier
+        verifier = SymbolicPriorVerifier(self.graph, safety_threshold=3.5, resource_budget=5.0)
+        verify_report = verifier.verify_action_safety(target_node, base_threat, self.action_weights)
+        proof_log_text = "\n".join([f"  - {line}" for line in verify_report["proof_log"]])
+        
+        # 4. Assemble TaCIE prompt with Formal Proof embeddings
         prompt = f"""
 [SYSTEM: UNIVERSAL NEURO-SYMBOLIC ADVISOR]
 You are a strategic intelligence AI. You must analyze the following extracted Knowledge Graph subgraph and provide operational advice.
@@ -112,11 +118,19 @@ Threat Exposure of Local Network:
 Our temporal math engine has simulated the available mitigation actions:
 {counterfactual_text}
 
-[STAGE 3: BOOSTING OF THOUGHTS REASONING]
+[STAGE 3: FORMAL SYMBOLIC PRIORS & CONSTRAINT SATISFIABILITY PROOFS]
+The verification engine successfully solved the logical boundary conditions for safety and resource allocation constraints:
+- Solver Engine: {verify_report['solver_engine']}
+- Safety Saturation Satisfied: {verify_report['safety_satisfied']}
+- Optimal Action Allocation Ratios: {verify_report['optimized_commitment_ratios']}
+- Analytical Proof Log:
+{proof_log_text}
+
+[STAGE 4: BOOSTING OF THOUGHTS REASONING]
 Perform a step-by-step analysis:
 1. Threat Translation: How does the threat propagate through the linearized network above to reach {target_node}?
-2. Action Evaluation: Based on the counterfactual simulations, which action is mathematically superior?
-3. Self-Critique: Are there secondary risks to taking this action?
+2. Action Evaluation: Based on the counterfactual simulations and SMT/Algebraic solver commitments, which actions are formally proven safe?
+3. Self-Critique: Are there secondary risks to taking these actions?
 4. Final Recommendation: Provide the final mitigation strategy.
 """
         return prompt.strip()
@@ -140,5 +154,5 @@ if __name__ == "__main__":
     orchestrator = UniversalNeuroSymbolicOrchestrator(mock_graph, mock_gnn_states, mock_actions, mock_weights)
     prompt = orchestrator.generate_universal_tacie_prompt("AUTOMOTIVEPLANT")
     
-    print("\n--- Auto-Generated Universal TaCIE Prompt ---")
+    print("\n--- Auto-Generated Universal TaCIE Prompt with SMT Proofs ---")
     print(prompt)

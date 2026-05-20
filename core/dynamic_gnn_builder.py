@@ -31,32 +31,80 @@ def _numba_propagate(H, W_edge, A, update_gate=0.3):
     new_H = (H * update_gate) + (messages * (1.0 - update_gate))
     return new_H, W_edge
 
+@njit(cache=True)
+def _ode_derivative(H, A, W_edge, alpha=0.5):
+    """
+    Computes continuous stress rate of change: dH/dt = -alpha * H + messages
+    """
+    num_nodes = len(H)
+    messages = np.zeros(num_nodes)
+    for u in range(num_nodes):
+        for v in range(num_nodes):
+            if A[u, v] > 0:
+                messages[v] += H[u] * W_edge[u, v]
+    return -alpha * H + messages
+
+@njit(cache=True)
+def _numba_propagate_ode(H, W_edge, A, dt=1.0, alpha=0.5):
+    """
+    Solves continuous temporal state propagation via 4th-order Runge-Kutta (RK4) integration.
+    """
+    num_nodes = len(H)
+    
+    k1 = _ode_derivative(H, A, W_edge, alpha)
+    
+    H_k2 = H + 0.5 * dt * k1
+    k2 = _ode_derivative(H_k2, A, W_edge, alpha)
+    
+    H_k3 = H + 0.5 * dt * k2
+    k3 = _ode_derivative(H_k3, A, W_edge, alpha)
+    
+    H_k4 = H + dt * k3
+    k4 = _ode_derivative(H_k4, A, W_edge, alpha)
+    
+    new_H = H + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    
+    for i in range(num_nodes):
+        new_H[i] = max(new_H[i], 0.0)
+        
+    for u in range(num_nodes):
+        stress = H[u]
+        degradation = 1.0 - (stress * 0.1)
+        for v in range(num_nodes):
+            W_edge[u, v] = max(W_edge[u, v] * degradation, 0.1)
+            
+    return new_H, W_edge
+
 # ── JIT COMPILER WARMUP PHASE ──
 # Run an immediate execution with dummy structures during import to trigger
 # LLVM compilation before any user requests arrive.
-print("[GNN Warmup] Compiling T-GAT Numba JIT math kernels...")
+print("[GNN Warmup] Compiling T-GAT Numba JIT math kernels (Discrete + Continuous)...")
 _dummy_H = np.zeros(2, dtype=np.float64)
 _dummy_W = np.zeros((2, 2), dtype=np.float64)
 _dummy_A = np.zeros((2, 2), dtype=np.float64)
 _, _ = _numba_propagate(_dummy_H, _dummy_W, _dummy_A, update_gate=0.3)
+_, _ = _numba_propagate_ode(_dummy_H, _dummy_W, _dummy_A, dt=1.0, alpha=0.5)
 print("[GNN Warmup] JIT Compilation complete. Zero cold-start latency expected.")
 
 
 class DynamicTGATBuilder:
-    def __init__(self, graph_json: str):
+    def __init__(self, graph_json: str, propagation_mode: str = "continuous_ode", alpha: float = 0.5):
         """
         Stage 2: Dynamic GNN Auto-Configuration.
         Reads the auto-generated generic Knowledge Graph and dynamically sizes
         the Temporal Graph Attention Network (T-GAT) arrays.
         """
         data = json.loads(graph_json)
+        self.propagation_mode = propagation_mode
+        self.alpha = alpha
+        self.last_signal_time = None
         
         # 1. Dynamically Map Nodes
         self.node_names = [n[0] for n in data["nodes"]]
         self.num_nodes = len(self.node_names)
         self.node_idx = {name: idx for idx, name in enumerate(self.node_names)}
         
-        print(f"[GNN Compiler] Auto-configuring GNN layers for {self.num_nodes} nodes...")
+        print(f"[GNN Compiler] Auto-configuring GNN layers for {self.num_nodes} nodes under '{self.propagation_mode}' regime...")
         
         # 2. Dynamically build Adjacency Matrix (A) and Edge Weights (W_edge)
         self.A = np.zeros((self.num_nodes, self.num_nodes))
@@ -76,8 +124,9 @@ class DynamicTGATBuilder:
 
     def stream_continuous_signal(self, node_name: str, shock_value: float, timestamp: float = None):
         """
-        Missing Element A: Continuous Temporal Streaming API.
+        Continuous Temporal Streaming API.
         Accepts real-time signals (IoT, RSS, Tickers) and injects them as dynamic perturbations.
+        Dynamically computes continuous time-deltas dt.
         """
         if node_name not in self.node_idx:
             print(f"[API WARN] Signal dropped. Target '{node_name}' not found in active graph.")
@@ -88,15 +137,23 @@ class DynamicTGATBuilder:
         self.H[idx] += shock_value
         print(f"[Streaming API] {time.strftime('%H:%M:%S')} | Shock Ingested: +{shock_value} at {node_name}")
         
+        dt = 1.0
+        if timestamp is not None:
+            if self.last_signal_time is not None:
+                dt = max(0.001, timestamp - self.last_signal_time)
+            self.last_signal_time = timestamp
+            
         # Auto-trigger network propagation
-        self._propagate_temporal_shock()
+        self._propagate_temporal_shock(dt=dt)
 
-    def _propagate_temporal_shock(self):
+    def _propagate_temporal_shock(self, dt: float = 1.0):
         """
         Executes the mathematical T-GAT propagation across the auto-generated graph.
         """
-        # Delegate heavy mathematical update steps to Numba compiled routine
-        self.H, self.W_edge = _numba_propagate(self.H, self.W_edge, self.A, update_gate=0.3)
+        if self.propagation_mode == "continuous_ode":
+            self.H, self.W_edge = _numba_propagate_ode(self.H, self.W_edge, self.A, dt=dt, alpha=self.alpha)
+        else:
+            self.H, self.W_edge = _numba_propagate(self.H, self.W_edge, self.A, update_gate=0.3)
 
     def get_network_state(self):
         """

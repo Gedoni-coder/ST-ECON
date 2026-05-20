@@ -29,6 +29,142 @@ from feedback_loop import WeakSupervisionEngine
 from tenant_registry import TenantRegistry
 from transfusion_accelerator import generate_acceleration_report, EinsumCascadeDAG, DPipeScheduler
 from llm_client import llm_client
+import numpy as np
+
+# Try importing torch-based edge lab modules, fallback to NumPy twins if PyTorch is not installed
+try:
+    import torch
+    import torch.nn as nn
+    from experiments.mas_attention import MASAttention
+    from experiments.quantize_model import LinearAttentionRegressor
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+
+class MASAttentionTwin:
+    def __init__(self, d_model: int = 128, n_heads: int = 4, sram_limit_bytes: int = 4096):
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads
+        self.sram_limit_bytes = sram_limit_bytes
+        # Seed for reproducible outputs
+        rng = np.random.default_rng(42)
+        self.q_w = rng.normal(0.0, 0.01, (d_model, d_model))
+        self.k_w = rng.normal(0.0, 0.01, (d_model, d_model))
+        self.v_w = rng.normal(0.0, 0.01, (d_model, d_model))
+        self.out_w = rng.normal(0.0, 0.01, (d_model, d_model))
+
+    def forward(self, x: np.ndarray, use_mixed_precision: bool = True) -> np.ndarray:
+        batch_size, seq_len, _ = x.shape
+        element_size = 2 if use_mixed_precision else 4
+        block_size = max(8, self.sram_limit_bytes // (self.d_k * element_size * 2))
+        
+        Q = np.dot(x, self.q_w)
+        K = np.dot(x, self.k_w)
+        V = np.dot(x, self.v_w)
+        
+        Q = Q.reshape(batch_size, seq_len, self.n_heads, self.d_k).transpose(0, 2, 1, 3)
+        K = K.reshape(batch_size, seq_len, self.n_heads, self.d_k).transpose(0, 2, 1, 3)
+        V = V.reshape(batch_size, seq_len, self.n_heads, self.d_k).transpose(0, 2, 1, 3)
+        
+        output = np.zeros_like(Q)
+        
+        for q_start in range(0, seq_len, block_size):
+            q_end = min(q_start + block_size, seq_len)
+            Q_block = Q[:, :, q_start:q_end, :]
+            
+            accum_num = np.zeros((batch_size, self.n_heads, q_end - q_start, self.d_k))
+            accum_den = np.zeros((batch_size, self.n_heads, q_end - q_start, 1))
+            
+            for k_start in range(0, seq_len, block_size):
+                k_end = min(k_start + block_size, seq_len)
+                K_block = K[:, :, k_start:k_end, :]
+                V_block = V[:, :, k_start:k_end, :]
+                
+                scores = np.matmul(Q_block, K_block.transpose(0, 1, 3, 2)) / (self.d_k ** 0.5)
+                max_scores = np.max(scores, axis=-1, keepdims=True)
+                exp_scores = np.exp(scores - max_scores)
+                
+                accum_num += np.matmul(exp_scores, V_block)
+                accum_den += np.sum(exp_scores, axis=-1, keepdims=True)
+                
+            output[:, :, q_start:q_end, :] = accum_num / (accum_den + 1e-9)
+            
+        output = output.transpose(0, 2, 1, 3).reshape(batch_size, seq_len, self.d_model)
+        return np.dot(output, self.out_w)
+
+class LinearAttentionRegressorTwin:
+    def __init__(self, d_model: int = 128):
+        rng = np.random.default_rng(42)
+        self.fc1_w = rng.normal(0.0, 0.01, (d_model, 256))
+        self.fc1_b = np.zeros(256)
+        self.fc2_w = rng.normal(0.0, 0.01, (256, 32))
+        self.fc2_b = np.zeros(32)
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        x1 = np.maximum(0, np.dot(x, self.fc1_w) + self.fc1_b)
+        return np.dot(x1, self.fc2_w) + self.fc2_b
+
+def run_edge_inference_pipeline(H: np.ndarray, sram_limit_bytes: int = 4096, use_mixed_precision: bool = True):
+    num_nodes = len(H)
+    element_size = 2 if use_mixed_precision else 4
+    d_model = 128
+    n_heads = 4
+    d_k = d_model // n_heads
+    
+    x_np = np.zeros((1, num_nodes, d_model), dtype=np.float32)
+    for i in range(num_nodes):
+        freqs = np.sin(np.arange(d_model) * (i + 1) * 0.1)
+        x_np[0, i, :] = H[i] * freqs
+        
+    block_size = max(8, sram_limit_bytes // (d_k * element_size * 2))
+    
+    if HAS_TORCH:
+        torch.manual_seed(42)
+        mas_model = MASAttention(d_model=d_model, n_heads=n_heads, sram_limit_bytes=sram_limit_bytes)
+        reg_model = LinearAttentionRegressor(d_model=d_model)
+        
+        x_tensor = torch.tensor(x_np, dtype=torch.float32)
+        with torch.no_grad():
+            attn_out = mas_model(x_tensor, use_mixed_precision=use_mixed_precision)
+            reg_out = reg_model(attn_out)
+        
+        reg_out_np = reg_out.numpy()
+        framework = "PyTorch"
+    else:
+        mas_twin = MASAttentionTwin(d_model=d_model, n_heads=n_heads, sram_limit_bytes=sram_limit_bytes)
+        reg_twin = LinearAttentionRegressorTwin(d_model=d_model)
+        
+        attn_out_np = mas_twin.forward(x_np, use_mixed_precision=use_mixed_precision)
+        reg_out_np = reg_twin.forward(attn_out_np)
+        framework = "NumPy (Mathematical Twin Fallback)"
+        
+    original_dram_activation_bytes = int(3 * 1 * num_nodes * d_model * element_size + 1 * n_heads * num_nodes * num_nodes * element_size)
+    
+    peak_sram_bytes = int(
+        (n_heads * block_size * d_k * element_size) + 
+        (2 * n_heads * block_size * d_k * element_size) + 
+        (n_heads * block_size * block_size * element_size) +
+        (n_heads * block_size * d_k * element_size) +
+        (n_heads * block_size * 1 * element_size)
+    )
+    
+    memory_reduction_ratio = float(original_dram_activation_bytes / max(1.0, peak_sram_bytes))
+    register_footprint_units = int(n_heads * (d_k + block_size) * (2 if use_mixed_precision else 4))
+    
+    mean_risk_metrics = np.mean(reg_out_np[0], axis=0).tolist()
+    
+    return {
+        "framework": framework,
+        "sequence_length": num_nodes,
+        "block_size": block_size,
+        "peak_sram_usage_bytes": peak_sram_bytes,
+        "register_footprint_units": register_footprint_units,
+        "memory_reduction_ratio": round(memory_reduction_ratio, 2),
+        "original_dram_activation_bytes": original_dram_activation_bytes,
+        "streamed_sram_activation_bytes": peak_sram_bytes,
+        "regressor_output_risk_metrics": mean_risk_metrics
+    }
 
 # ──────────────────────────────────────────────
 # GLOBAL ENGINE STATE
@@ -60,6 +196,10 @@ class FeedbackRequest(BaseModel):
     action_taken: str
     initial_threat: float
     realized_outcome: float
+
+class EdgeInferenceRequest(BaseModel):
+    sram_limit_bytes: Optional[int] = 4096
+    use_mixed_precision: Optional[bool] = True
 
 # ──────────────────────────────────────────────
 # AUTH DEPENDENCY
@@ -302,6 +442,34 @@ async def acceleration_profile(project_id: str, org_id: str = Depends(authentica
     num_nodes = engine["gnn"].num_nodes
     report = generate_acceleration_report(seq_len=max(32, num_nodes * 16), d_model=64, n_heads=4)
     return {"project_id": project_id, "transfusion_report": report}
+
+# ──────────────────────────────────────────────
+# 8. EDGE INFERENCE SIMULATION
+#    Exposes SRAM block-streaming attention memory metrics
+#    and Regressor risk metrics for living GNN states.
+# ──────────────────────────────────────────────
+@app.post("/projects/{project_id}/edge_inference")
+async def edge_inference_simulation(project_id: str, req: EdgeInferenceRequest, org_id: str = Depends(authenticate)):
+    project = registry.get_project(project_id)
+    if not project or project["status"] != "live":
+        raise HTTPException(status_code=404, detail="Project not found or not yet ingested.")
+        
+    engine = project["engine_state"]
+    H = engine["gnn"].H
+    
+    try:
+        report = run_edge_inference_pipeline(
+            H=H,
+            sram_limit_bytes=req.sram_limit_bytes,
+            use_mixed_precision=req.use_mixed_precision
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Edge inference simulation failed: {str(e)}")
+        
+    return {
+        "project_id": project_id,
+        "edge_inference_simulation": report
+    }
 
 
 @app.on_event("shutdown")
