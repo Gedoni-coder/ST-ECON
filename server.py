@@ -16,7 +16,9 @@ import json
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 
@@ -105,9 +107,18 @@ class LinearAttentionRegressorTwin:
         x1 = np.maximum(0, np.dot(x, self.fc1_w) + self.fc1_b)
         return np.dot(x1, self.fc2_w) + self.fc2_b
 
-def run_edge_inference_pipeline(H: np.ndarray, sram_limit_bytes: int = 4096, use_mixed_precision: bool = True):
+def run_edge_inference_pipeline(H: np.ndarray, sram_limit_bytes: int = 4096, use_mixed_precision: bool = True, precision: str = "FP16"):
     num_nodes = len(H)
-    element_size = 2 if use_mixed_precision else 4
+    precision_upper = precision.upper()
+    if precision_upper == "FP32":
+        element_size = 4
+        use_mixed_precision = False
+    elif precision_upper == "INT8":
+        element_size = 1
+        use_mixed_precision = True
+    else: # FP16
+        element_size = 2
+        use_mixed_precision = True
     d_model = 128
     n_heads = 4
     d_k = d_model // n_heads
@@ -200,6 +211,13 @@ class FeedbackRequest(BaseModel):
 class EdgeInferenceRequest(BaseModel):
     sram_limit_bytes: Optional[int] = 4096
     use_mixed_precision: Optional[bool] = True
+    precision: Optional[str] = "FP16"
+
+class SimulateTemporalRequest(BaseModel):
+    node_name: str
+    shock_value: float
+    steps: Optional[int] = 20
+    dt: Optional[float] = 1.0
 
 # ──────────────────────────────────────────────
 # AUTH DEPENDENCY
@@ -219,16 +237,33 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Enable CORS for UI interactions
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Serve the UI
+ui_path = os.path.join(os.path.dirname(__file__), "ui")
+os.makedirs(ui_path, exist_ok=True)
+app.mount("/ui", StaticFiles(directory=ui_path), name="ui")
+
 @app.get("/health")
 async def health():
-    live_projects = sum(1 for p in registry.projects.values() if p["status"] == "live")
+    stats = registry.get_platform_stats()
     return {
         "status": "operational",
-        "tenants": len(registry.tenants),
-        "total_projects": len(registry.projects),
-        "live_projects": live_projects
+        "tenants": stats["tenants"],
+        "total_projects": stats["total_projects"],
+        "live_projects": stats["live_projects"]
     }
 
+@app.get("/")
+async def root():
+    return FileResponse(os.path.join(ui_path, "index.html"))
 # ──────────────────────────────────────────────
 # 1. TENANT REGISTRATION
 # ──────────────────────────────────────────────
@@ -321,19 +356,25 @@ async def query_project(project_id: str, req: QueryRequest, org_id: str = Depend
     num_nodes = engine["gnn"].num_nodes
     accel = generate_acceleration_report(seq_len=max(32, num_nodes * 16), d_model=64, n_heads=4)
     
+    # ── FORMAL SYMBOLIC PRIORS & CONSTRAINT SATISFIABILITY PROOFS ──
+    from symbolic_verifier import SymbolicPriorVerifier
+    base_threat = subgraph_data["threat_states"].get(req.target_node, 0.0)
+    verifier = SymbolicPriorVerifier(engine["nx_graph"], safety_threshold=3.5, resource_budget=5.0)
+    verify_report = verifier.verify_action_safety(req.target_node, base_threat, engine["supervision"].action_weights)
+
     # ── LLM ADVISORY GENERATION ──
     action_confidence = engine["supervision"].get_action_confidence()
     llm_result = await llm_client.generate(
         tacie_prompt=tacie_prompt,
         target_node=req.target_node,
-        threat_level=subgraph_data["threat_states"].get(req.target_node, 0.0),
+        threat_level=base_threat,
         actions=action_confidence
     )
 
     return {
         "project_id": project_id,
         "target_node": req.target_node,
-        "current_threat": subgraph_data["threat_states"].get(req.target_node, 0.0),
+        "current_threat": base_threat,
         "local_network": subgraph_data["linearized_text"],
         "threat_map": subgraph_data["threat_states"],
         "counterfactual_actions": action_confidence,
@@ -341,6 +382,7 @@ async def query_project(project_id: str, req: QueryRequest, org_id: str = Depend
         "advisory_model": llm_result["model"],
         "advisory_backend": llm_result["backend"],
         "tacie_prompt_for_llm": tacie_prompt,
+        "verify_report": verify_report,
         "transfusion_acceleration": {
             "dpipe_speedup": accel["dpipe_scheduling"]["speedup"],
             "dpipe_pipelined_latency_us": accel["dpipe_scheduling"]["pipelined_latency_us"],
@@ -461,7 +503,8 @@ async def edge_inference_simulation(project_id: str, req: EdgeInferenceRequest, 
         report = run_edge_inference_pipeline(
             H=H,
             sram_limit_bytes=req.sram_limit_bytes,
-            use_mixed_precision=req.use_mixed_precision
+            use_mixed_precision=req.use_mixed_precision,
+            precision=req.precision or "FP16"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Edge inference simulation failed: {str(e)}")
@@ -469,6 +512,46 @@ async def edge_inference_simulation(project_id: str, req: EdgeInferenceRequest, 
     return {
         "project_id": project_id,
         "edge_inference_simulation": report
+    }
+
+# ──────────────────────────────────────────────
+# 9. TEMPORAL CONTINUOUS SIMULATION (RK4)
+#    Simulates threat propagation over time
+# ──────────────────────────────────────────────
+@app.post("/projects/{project_id}/simulate_temporal")
+async def simulate_temporal(project_id: str, req: SimulateTemporalRequest, org_id: str = Depends(authenticate)):
+    project = registry.get_project(project_id)
+    if not project or project["status"] != "live":
+        raise HTTPException(status_code=404, detail="Project not found or not yet ingested.")
+    
+    engine = project["engine_state"]
+    gnn = engine["gnn"]
+    
+    # Run the continuous RK4 integration step-by-step
+    sim_H = gnn.H.copy()
+    sim_W_edge = gnn.W_edge.copy()
+    
+    # Inject shock to the starting node
+    if req.node_name in gnn.node_idx:
+        idx = gnn.node_idx[req.node_name]
+        sim_H[idx] += req.shock_value
+        
+    timeline = []
+    # Step 0
+    timeline.append({name: float(sim_H[idx]) for name, idx in gnn.node_idx.items()})
+    
+    # Let's import the Numba ODE solver function from dynamic_gnn_builder
+    from dynamic_gnn_builder import _numba_propagate_ode
+    
+    for _ in range(req.steps):
+        sim_H, sim_W_edge = _numba_propagate_ode(sim_H, sim_W_edge, gnn.A, dt=req.dt, alpha=gnn.alpha)
+        timeline.append({name: float(sim_H[idx]) for name, idx in gnn.node_idx.items()})
+        
+    return {
+        "project_id": project_id,
+        "shocked_node": req.node_name,
+        "shock_value": req.shock_value,
+        "timeline": timeline
     }
 
 

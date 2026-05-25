@@ -223,3 +223,21 @@ class TenantRegistry:
                     "created_at": r[3]
                 } for r in rows
             ]
+
+    def get_platform_stats(self) -> dict:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM tenants")
+            tenants = c.fetchone()[0]
+            
+            c.execute("SELECT COUNT(*) FROM projects")
+            total_projects = c.fetchone()[0]
+            
+            c.execute("SELECT COUNT(*) FROM projects WHERE status = 'live'")
+            live_projects = c.fetchone()[0]
+            
+            return {
+                "tenants": tenants,
+                "total_projects": total_projects,
+                "live_projects": live_projects
+            }

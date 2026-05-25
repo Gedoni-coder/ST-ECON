@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ST-ECON — Spatial-Temporal Intelligence Engine</title>
+    <meta name="description" content="AI-Driven Spatial-Temporal Decision Support Engine for MSMEs in Volatile Macroeconomic Environments.">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+    <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+
+    <!-- ───── Top Bar / Global Telemetry Header ───── -->
+    <header class="top-bar">
+        <div class="top-bar__left">
+            <div class="logo">
+                <span class="logo__icon">⬢</span>
+                <span class="logo__text">ST-ECON</span>
+                <span class="logo__badge">LIVE COMMAND CENTER</span>
+            </div>
+        </div>
+        <div class="top-bar__center">
+            <div class="status-indicator">
+                <span class="pulse-dot"></span>
+                <span id="statusText">Connecting to GNN Server...</span>
+            </div>
+            <div class="active-project-tag">
+                <span class="tag-label">Active Project:</span>
+                <span id="activeProjectDisplay" class="tag-value">Initializing...</span>
+            </div>
+        </div>
+        <div class="top-bar__right">
+            <div class="header-stats">
+                <span class="h-stat"><span class="h-stat-lbl">Tenants:</span> <strong id="statTenants">0</strong></span>
+                <span class="h-stat"><span class="h-stat-lbl">Projects:</span> <strong id="statProjects">0</strong></span>
+                <span class="h-stat"><span class="h-stat-lbl">Nodes:</span> <strong id="statNodes">0</strong></span>
+            </div>
+            <div class="api-key-container">
+                <span class="api-key-label">API Key:</span>
+                <code id="apiKeyDisplay" title="Click to copy">—</code>
+            </div>
+        </div>
+    </header>
+
+    <!-- ───── Command Center Unified Workspace ───── -->
+    <main class="workspace-grid">
+        
+        <!-- =================== LEFT PANEL: INGESTION & ODE SIMULATOR =================== -->
+        <aside class="control-panel glass-panel">
+            
+            <!-- Component 1: Auto-Ingestion Console -->
+            <div class="panel-section">
+                <div class="section-header">
+                    <span class="section-icon">📥</span>
+                    <h3>1. Spatial-Temporal Ingestion</h3>
+                </div>
+                <div class="section-body">
+                    <p class="section-desc">Paste raw Reuters news or policy declarations. The engine extracts the relational graph topology using LLM spatial-temporal parsers.</p>
+                    <textarea id="kbText" class="form-textarea" rows="7" placeholder="Paste economic news text..."></textarea>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="projectName" class="form-label">Project Name</label>
+                            <input type="text" id="projectName" class="form-input" value="Nigerian Macro Shock" />
+                        </div>
+                    </div>
+
+                    <button id="ingestBtn" class="primary-btn">
+                        <span class="btn-glow"></span>
+                        <span class="btn-text">🚀 Ingest News & Compile GNN</span>
+                    </button>
+                </div>
+            </div>
+
+            <hr class="panel-divider">
+
+            <!-- Component 2: ODE Temporal Simulator Controls -->
+            <div class="panel-section">
+                <div class="section-header">
+                    <span class="section-icon">⏳</span>
+                    <h3>2. ODE Temporal Simulator</h3>
+                </div>
+                <div class="section-body">
+                    <p class="section-desc">Trigger a continuous stress shock. The engine uses 4th-order Runge-Kutta (RK4) integration to solve: <em>dH/dt = -αH + messages</em>.</p>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="simulationTarget" class="form-label">Target Node</label>
+                            <input type="text" id="simulationTarget" class="form-input" placeholder="Select node from graph" readonly />
+                        </div>
+                        <div class="form-group">
+                            <label for="shockMagnitude" class="form-label">Shock Magnitude</label>
+                            <input type="number" id="shockMagnitude" class="form-input" value="5.0" step="0.5" />
+                        </div>
+                    </div>
+
+                    <button id="simulateBtn" class="secondary-btn" disabled>
+                        <span class="btn-text">⚡ Solve RK4 Shock Propagation</span>
+                    </button>
+
+                    <!-- Continuous Time Scrub Timeline -->
+                    <div class="timeline-container">
+                        <div class="timeline-header">
+                            <span class="timeline-title">Continuous Time Timeline</span>
+                            <span id="timelineStepDisplay" class="timeline-step">Step: T + 0 months</span>
+                        </div>
+                        <input type="range" id="timelineSlider" class="timeline-slider" min="0" max="20" value="0" disabled>
+                        <div class="timeline-labels">
+                            <span>Shock Ingest (T+0)</span>
+                            <span>Mid-Term (T+10)</span>
+                            <span>Stabilization (T+20)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- =================== CENTER PANEL: NETWORK VISUALIZATION =================== -->
+        <section class="visualizer-panel glass-panel">
+            <div class="panel-header-overlay">
+                <div class="panel-title-group">
+                    <span class="panel-indicator animate-pulse"></span>
+                    <h2>Spatial-Temporal Relational Threat Map</h2>
+                </div>
+                <div class="graph-legend">
+                    <span class="legend-item"><span class="legend-dot normal"></span>Normal</span>
+                    <span class="legend-item"><span class="legend-dot warning"></span>Moderate Risk (≥1.0)</span>
+                    <span class="legend-item"><span class="legend-dot danger"></span>Extreme Stress (≥3.0)</span>
+                </div>
+            </div>
+            
+            <!-- Cytoscape Canvas -->
+            <div id="cy"></div>
+            
+            <div class="graph-instructions">
+                <p>💡 Click any node on the graph to set it as target for continuous shock simulation or logical safety verification.</p>
+            </div>
+        </section>
+
+        <!-- =================== RIGHT PANEL: TRANSFUSION EDGE TELEMETRY =================== -->
+        <aside class="telemetry-panel glass-panel">
+            
+            <div class="panel-section">
+                <div class="section-header">
+                    <span class="section-icon">⚡</span>
+                    <h3>3. TransFusion Edge Telemetry</h3>
+                </div>
+                <div class="section-body">
+                    <p class="section-desc">Simulates hardware-level execution of on-device attention modules. Test quantization bounds for localized MSME mobile clients.</p>
+                    
+                    <div class="precision-selector">
+                        <span class="selector-label">Precision Regime:</span>
+                        <div class="pill-group" id="precisionPills">
+                            <button class="pill-btn" data-precision="FP32">FP32</button>
+                            <button class="pill-btn active" data-precision="FP16">FP16</button>
+                            <button class="pill-btn" data-precision="INT8">INT8</button>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sramLimit" class="form-label">SRAM Cache Limit (Bytes)</label>
+                            <input type="number" id="sramLimit" class="form-input" value="4096" />
+                        </div>
+                    </div>
+
+                    <button id="edgeInferenceBtn" class="primary-btn">
+                        <span class="btn-text">🎛️ Run Edge Inference Simulation</span>
+                    </button>
+
+                    <!-- Telemetry Stats Grid -->
+                    <div class="telemetry-grid">
+                        <div class="telemetry-card">
+                            <span class="t-label">DRAM Activation Reduction</span>
+                            <div class="t-value-group">
+                                <span id="telemetryDramSavings" class="t-value">0.0x</span>
+                                <span class="t-unit">savings</span>
+                            </div>
+                            <div class="telemetry-progress-track">
+                                <div id="savingsProgress" class="telemetry-progress-fill" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <div class="telemetry-card">
+                            <span class="t-label">Peak SRAM Allocation</span>
+                            <div class="t-value-group">
+                                <span id="telemetrySramUsage" class="t-value">0</span>
+                                <span class="t-unit">bytes</span>
+                            </div>
+                        </div>
+
+                        <div class="telemetry-card">
+                            <span class="t-label">Pipelined Block Size</span>
+                            <div class="t-value-group">
+                                <span id="telemetryBlockSize" class="t-value">0</span>
+                                <span class="t-unit">nodes</span>
+                            </div>
+                        </div>
+
+                        <div class="telemetry-card">
+                            <span class="t-label">DPipe Hardware Speedup</span>
+                            <div class="t-value-group">
+                                <span id="telemetrySpeedup" class="t-value">0.00x</span>
+                                <span class="t-unit">faster</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="advanced-accel-report">
+                        <h4>DPipe Latency Profile:</h4>
+                        <div class="accel-lines">
+                            <div class="accel-line"><span>Pipelined Latency:</span> <strong id="telemetryLatency">0.0 μs</strong></div>
+                            <div class="accel-line"><span>PE 2D Array Util:</span> <strong id="telemetryPe2d">0.0%</strong></div>
+                            <div class="accel-line"><span>Softmax Memory Reduction:</span> <strong id="telemetrySoftmaxSavings">0.0x</strong></div>
+                            <div class="accel-line"><span>Inter-layer DRAM Savings:</span> <strong id="telemetryDramSavingsPct">0.0%</strong></div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- =================== BOTTOM SPLIT: NEURO-SYMBOLIC PROOFS & ADVISORY =================== -->
+        <footer class="bottom-split-panel glass-panel">
+            
+            <!-- Column 1: SMT Constraint Solver Terminal (Symbolic prior verifier) -->
+            <div class="bottom-pane symbolic-pane">
+                <div class="pane-header">
+                    <span class="pane-indicator symbolic"></span>
+                    <h4>Z3 SMT Solver & Symbolic Prior Verification</h4>
+                    <span class="solver-badge" id="solverEngineTag">Solver Offline</span>
+                </div>
+                <div class="terminal-container">
+                    <div class="terminal-body" id="smtConsole">
+                        <div class="terminal-line system-msg">> Engine waiting for target query...</div>
+                    </div>
+                </div>
+                <div class="optimized-ratios">
+                    <span class="ratio-title">Proven Mitigation Resource Allocation:</span>
+                    <div class="ratio-list" id="optimizedCommitmentRatios">
+                        <span class="empty-state">Select a node and trigger verification.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Column 2: Grounded Advisory Output (TaCIE LLM Engine) -->
+            <div class="bottom-pane advisory-pane">
+                <div class="pane-header">
+                    <span class="pane-indicator advisory"></span>
+                    <h4>TaCIE Grounded LLM Advisory Recommendations</h4>
+                    <span class="advisory-badge" id="advisoryModelTag">LLM Offline</span>
+                </div>
+                <div class="advisory-body-scroll" id="advisoryBody">
+                    <p class="empty-state">Select a node in the graph to query the Neuro-Symbolic reasoning engine. The engine will run counterfactual evaluations, verify them against physical boundaries, and return a grounded operational recommendation.</p>
+                </div>
+                <div class="action-confidence-section" id="actionConfidenceGroup" style="display: none;">
+                    <h5>Vectorized Action Recommendation Confidence</h5>
+                    <div class="action-bars-container" id="actionBars">
+                        <!-- Action bars appended here -->
+                    </div>
+                </div>
+            </div>
+
+        </footer>
+
+    </main>
+
+    <!-- Toast container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="/ui/app.js"></script>
+</body>
+</html>

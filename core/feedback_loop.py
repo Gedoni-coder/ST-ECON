@@ -59,20 +59,23 @@ class WeakSupervisionEngine:
             "improvement": improvement
         })
 
-    def get_action_confidence(self):
+    
+    def get_action_confidence(self) -> dict:
         """
         Returns the sorted dictionary of normalized action confidence scores.
         Uses a Softmax-like normalization function to present bounded relative confidence ratios.
         """
         import numpy as np
+        if not self.action_weights:
+            return {}
         # Convert weights to exponential scale to obtain a relative probability distribution
-        weights = np.array([self.action_weights[a] for a in self.action_space], dtype=np.float64)
+        weights = np.array(list(self.action_weights.values()))
         exp_w = np.exp(weights - np.max(weights)) # Subtraction for numerical stability
-        softmax_probs = exp_w / np.sum(exp_w)
+        probs = exp_w / exp_w.sum()
         
         normalized_weights = {
-            self.action_space[i]: float(round(softmax_probs[i], 4))
-            for i in range(len(self.action_space))
+            action: float(round(prob, 4))
+            for action, prob in zip(self.action_weights.keys(), probs)
         }
         return dict(sorted(normalized_weights.items(), key=lambda item: item[1], reverse=True))
 
