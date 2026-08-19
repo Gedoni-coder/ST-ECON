@@ -1,0 +1,20 @@
+# Core pipeline
+numpy>=1.24
+networkx>=3.0
+
+# API gateway
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.0
+httpx>=0.27
+
+# Attention / quantization experiments
+torch>=2.0
+
+# Optional: JIT acceleration for dynamic_gnn_builder.
+# Without it the propagation kernels fall back to pure Python.
+numba>=0.59
+
+# Optional: local LLM backends for the advisory stage. Install whichever you use.
+# transformers>=4.40
+# llama-cpp-python>=0.2
